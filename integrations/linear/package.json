@@ -1,0 +1,32 @@
+{
+  "name": "@botpresshub/linear",
+  "private": true,
+  "scripts": {
+    "build": "bp add -y && bp build",
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@botpress/client": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@linear/sdk": "^65.2.0",
+    "axios": "^1.4.0",
+    "query-string": "^6.14.1",
+    "tsafe": "^1.6.4"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@botpresshub/deletable": "workspace:*",
+    "@botpresshub/listable": "workspace:*",
+    "@botpresshub/proactive-conversation": "workspace:*"
+  },
+  "bpDependencies": {
+    "listable": "../../interfaces/listable",
+    "deletable": "../../interfaces/deletable",
+    "proactive-conversation": "../../interfaces/proactive-conversation",
+    "files-readonly": "../../interfaces/files-readonly"
+  }
+}

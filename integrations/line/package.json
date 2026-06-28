@@ -1,0 +1,34 @@
+{
+  "name": "@botpresshub/line",
+  "description": "Line integration for Botpress",
+  "private": true,
+  "scripts": {
+    "build": "bp add -y && bp build",
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/client": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@botpress/sdk-addons": "workspace:*",
+    "@line/bot-sdk": "^9.5.0",
+    "remark": "^15.0.1",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@botpresshub/proactive-conversation": "workspace:*",
+    "@botpresshub/proactive-user": "workspace:*",
+    "@botpresshub/typing-indicator": "workspace:*",
+    "@types/mdast": "^4.0.4"
+  },
+  "bpDependencies": {
+    "typing-indicator": "../../interfaces/typing-indicator",
+    "proactive-user": "../../interfaces/proactive-user",
+    "proactive-conversation": "../../interfaces/proactive-conversation"
+  }
+}

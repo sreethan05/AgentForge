@@ -1,0 +1,19 @@
+{
+  "name": "@botpresshub/mintlify",
+  "scripts": {
+    "check:type": "tsc --noEmit",
+    "build": "bp add -y && bp build",
+    "check:bplint": "bp lint",
+    "test": "vitest --run"
+  },
+  "private": true,
+  "dependencies": {
+    "@botpress/client": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "axios": "^1.13.1"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/sdk": "workspace:*"
+  }
+}

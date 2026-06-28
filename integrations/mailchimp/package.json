@@ -1,0 +1,21 @@
+{
+  "name": "@botpresshub/mailchimp",
+  "scripts": {
+    "build": "bp add -y && bp build",
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "test": "vitest --run"
+  },
+  "private": true,
+  "dependencies": {
+    "@botpress/client": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@mailchimp/mailchimp_marketing": "^3.0.80"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@types/mailchimp__mailchimp_marketing": "3.0.10"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["BP_*"],
+  "tasks": {
+    "generate": {
+      "outputs": ["src/gen/**"],
+      "dependsOn": ["^generate", "^build"]
+    },
+    "llmz#generate": {
+      "outputs": ["src/**/*.md.ts"],
+      "dependsOn": ["^generate", "^build"]
+    },
+    "build": {
+      "outputs": ["bp_modules/**", ".botpress/**"],
+      "dependsOn": ["generate", "^build"]
+    },
+    "@bpinternal/zui#build": {
+      "outputs": ["dist/**"],
+      "dependsOn": ["generate", "^build"]
+    },
+    "@botpress/client#build": {
+      "outputs": ["dist/**"],
+      "dependsOn": ["generate", "^build"]
+    },
+    "@botpress/chat#build": {
+      "outputs": ["dist/**"],
+      "dependsOn": ["generate", "^build"]
+    },
+    "@botpress/sdk#build": {
+      "outputs": ["dist/**"],
+      "dependsOn": ["generate", "^build", "@bpinternal/zui#build"]
+    },
+    "@botpress/cli#build": {
+      "outputs": ["dist/**", "templates/*/.botpress/**"],
+      "dependsOn": ["generate", "^build"]
+    },
+    "@botpress/cognitive#build": {
+      "outputs": ["dist/**"],
+      "dependsOn": ["generate", "^build", "@bpinternal/zui#build"]
+    },
+    "@botpress/vai#build": {
+      "outputs": ["dist/**"],
+      "dependsOn": ["generate", "^build", "@bpinternal/zui#build"]
+    },
+    "@botpress/zai#build": {
+      "outputs": ["dist/**"],
+      "dependsOn": ["generate", "^build", "@bpinternal/zui#build"]
+    },
+    "llmz#build": {
+      "outputs": ["dist/**"],
+      "dependsOn": ["generate", "^build", "@botpress/cognitive#build"]
+    },
+    "check:type": {},
+    "check:bplint": {},
+    "test": {}
+  }
+}

@@ -1,0 +1,155 @@
+import { llm, speechToText } from '@botpress/common'
+import { validateGptOssReasoningEffort } from '@botpress/common/src/llm/openai'
+import OpenAI from 'openai'
+import { ModelId, SpeechToTextModelId } from './schemas'
+import * as bp from '.botpress'
+
+const groqClient = new OpenAI({
+  baseURL: 'https://api.groq.com/openai/v1',
+  apiKey: bp.secrets.GROQ_API_KEY,
+})
+
+const languageModels: Record<ModelId, llm.ModelDetails> = {
+  // Reference:
+  //  https://console.groq.com/docs/models
+  //  https://groq.com/pricing/
+  'openai/gpt-oss-20b': {
+    name: 'GPT-OSS 20B',
+    description:
+      'gpt-oss-20b is a compact, open-weight language model optimized for low-latency. It shares the same training foundation and capabilities as the GPT-OSS 120B model, with faster responses and lower cost.',
+    tags: ['general-purpose', 'reasoning', 'low-cost'],
+    input: {
+      costPer1MTokens: 0.1,
+      maxTokens: 131_000,
+    },
+    output: {
+      costPer1MTokens: 0.5,
+      maxTokens: 32_000,
+    },
+  },
+  'openai/gpt-oss-120b': {
+    name: 'GPT-OSS 120B',
+    description:
+      'gpt-oss-120b is a high-performance, open-weight language model designed for production-grade, general-purpose use cases. It excels at complex reasoning and supports configurable reasoning effort, full chain-of-thought transparency for easier debugging and trust, and native agentic capabilities for function calling, tool use, and structured outputs.',
+    tags: ['general-purpose', 'reasoning'],
+
+    input: {
+      costPer1MTokens: 0.15,
+      maxTokens: 131_000,
+    },
+    output: {
+      costPer1MTokens: 0.75,
+      maxTokens: 32_000,
+    },
+  },
+  'llama-3.3-70b-versatile': {
+    name: 'LLaMA 3.3 70B',
+    description:
+      'The Meta Llama 3.3 multilingual large language model (LLM) is a pretrained and instruction tuned generative model in 70B (text in/text out). The Llama 3.3 instruction tuned text only model is optimized for multilingual dialogue use cases and outperforms many of the available open source and closed chat models on common industry benchmarks.',
+    tags: ['recommended', 'general-purpose', 'coding'],
+    input: {
+      costPer1MTokens: 0.59,
+      maxTokens: 128_000,
+    },
+    output: {
+      costPer1MTokens: 0.79,
+      maxTokens: 32_768,
+    },
+  },
+  'llama-3.1-8b-instant': {
+    name: 'LLaMA 3.1 8B',
+    description: 'The Llama 3.1 instruction-tuned, text-only models are optimized for multilingual dialogue use cases.',
+    tags: ['low-cost', 'general-purpose'],
+    input: {
+      costPer1MTokens: 0.05,
+      maxTokens: 128_000,
+    },
+    output: {
+      costPer1MTokens: 0.08,
+      maxTokens: 8192,
+    },
+  },
+}
+
+const speechToTextModels: Record<SpeechToTextModelId, speechToText.SpeechToTextModelDetails> = {
+  'whisper-large-v3': {
+    name: 'Whisper V3',
+    costPerMinute: 0.00185,
+  },
+  'whisper-large-v3-turbo': {
+    name: 'Whisper V3 Turbo',
+    costPerMinute: 0.000666666666667,
+  },
+  'distil-whisper-large-v3-en': {
+    name: 'Whisper V3 English-only',
+    costPerMinute: 0.000333333333333,
+  },
+}
+
+const provider = 'Groq'
+
+export default new bp.Integration({
+  register: async () => {},
+  unregister: async () => {},
+  actions: {
+    generateContent: async ({ input, logger, metadata }) => {
+      const output = await llm.openai.generateContent<ModelId>(
+        <llm.GenerateContentInput>input,
+        groqClient as any, // TODO: fix mismatch of openai version
+        logger,
+        {
+          provider,
+          models: languageModels,
+          defaultModel: 'llama-3.3-70b-versatile',
+          overrideRequest: (request) => {
+            if (input.model?.id === 'openai/gpt-oss-20b' || input.model?.id === 'openai/gpt-oss-120b') {
+              request.reasoning_effort = validateGptOssReasoningEffort(input, logger)
+
+              // GPT-OSS models don't work well with a stop sequence, so we have to remove it from the request.
+              delete request.stop
+
+              // Reasoning models don't support temperature
+              delete request.temperature
+            }
+
+            return request
+          },
+        }
+      )
+      metadata.setCost(output.botpress.cost)
+      return output
+    },
+    transcribeAudio: async ({ input, logger, metadata }) => {
+      const output = await speechToText.openai.transcribeAudio(
+        input,
+        groqClient as any, // TODO: fix mismatch of openai version
+        logger,
+        {
+          provider,
+          models: speechToTextModels,
+          defaultModel: 'whisper-large-v3',
+        }
+      )
+      metadata.setCost(output.botpress.cost)
+      return output
+    },
+    listLanguageModels: async ({}) => {
+      return {
+        models: Object.entries(languageModels).map(([id, model]) => ({ id: <ModelId>id, ...model })),
+      }
+    },
+    listSpeechToTextModels: async ({}) => {
+      return {
+        models: [
+          {
+            id: 'whisper-1',
+            name: 'Whisper V2',
+            costPerMinute: 0.006,
+          },
+        ],
+      }
+    },
+  },
+  channels: {},
+  handler: async () => {},
+})

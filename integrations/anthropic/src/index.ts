@@ -1,0 +1,213 @@
+import Anthropic from '@anthropic-ai/sdk'
+import { llm } from '@botpress/common'
+import { GenerateContentInput } from '@botpress/common/src/llm'
+import { generateContent } from './actions/generate-content'
+import { DefaultModel, ModelId } from './schemas'
+import * as bp from '.botpress'
+
+const anthropic = new Anthropic({
+  apiKey: bp.secrets.ANTHROPIC_API_KEY,
+  timeout: 10 * 60 * 1000, // 10 minute timeout, we set it here to avoid the error thrown by the Anthropic SDK when not using streaming if the request maxTokens parameters is too high (see: https://github.com/anthropics/anthropic-sdk-typescript?tab=readme-ov-file#long-requests)
+})
+
+export type ReasoningEffort = NonNullable<GenerateContentInput['reasoningEffort']>
+
+export const ThinkingModeBudgetTokens: Record<ReasoningEffort, number> = {
+  none: 0,
+  dynamic: 8192, // Note: Anthropic doesn't support dynamic reasoning, so we default this to the same value as "medium"
+  low: 2048,
+  medium: 8192,
+  high: 16_384,
+  // Note: we cannot go above 20K tokens for the thinking mode budget as that would require us to use streaming, see:
+  // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
+}
+
+export const ReasoningModelIdReplacements: Partial<Record<ModelId, ModelId>> = {
+  // These "reasoning" model IDs didn't really exist in Anthropic, we used it as a simple way for users to switch between the reasoning mode and the standard mode, but this approach has been deprecated in favor of specifying a reasoning effort in the request to activate reasoning in the model.
+  'claude-haiku-4-5-reasoning-20251001': 'claude-haiku-4-5-20251001',
+  'claude-sonnet-4-5-reasoning-20250929': 'claude-sonnet-4-5-20250929',
+  'claude-sonnet-4-reasoning-20250514': 'claude-sonnet-4-20250514',
+}
+
+const LanguageModels: Record<ModelId, llm.ModelDetails> = {
+  // Reference: https://docs.anthropic.com/en/docs/about-claude/models
+  // NOTE: We don't support returning "thinking" blocks from Claude in the integration action output as the concept of "thinking" blocks is a Claude-specific feature that other providers don't have. For now we won't support this as an official feature in the integration so it needs to be taken into account when using reasoning mode and passing a multi-turn conversation history in the generateContent action input.
+  // For more information, see: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#preserving-thinking-blocks
+  // NOTE: We intentionally didn't include the Opus model as it's the most expensive model in the market, it's not very popular, and no users have ever requested it so far.
+  'claude-opus-4-7': {
+    name: 'Claude Opus 4.7',
+    description:
+      "Claude Opus 4.7 is Anthropic's most capable model to date. Building on Opus 4.6, it advances frontier coding, agentic reasoning, and enterprise workflows.",
+    tags: ['recommended', 'reasoning', 'agents', 'vision', 'general-purpose', 'coding'],
+    input: {
+      costPer1MTokens: 5,
+      maxTokens: 1_000_000,
+    },
+    output: {
+      costPer1MTokens: 15,
+      maxTokens: 128_000,
+    },
+  },
+  'claude-opus-4-6': {
+    name: 'Claude Opus 4.6',
+    description:
+      'Claude Opus 4.6 is anthropic\s most capable model to date. Building on the intelligence of Opus 4.5, it brings new levels of reliability and precision to coding, agents, and enterprise workflows.',
+    tags: ['recommended', 'reasoning', 'agents', 'vision', 'general-purpose', 'coding'],
+    input: {
+      costPer1MTokens: 5,
+      maxTokens: 1_000_000,
+    },
+    output: {
+      costPer1MTokens: 15,
+      maxTokens: 128_000,
+    },
+  },
+  'claude-sonnet-4-6': {
+    name: 'Claude Sonnet 4.6',
+    description:
+      'Claude Sonnet 4.6 offers the best combination of speed and intelligence in the Claude family. It features adaptive thinking for dynamic reasoning allocation, delivering fast responses for simple queries and deeper analysis for complex tasks.',
+    tags: ['recommended', 'reasoning', 'agents', 'vision', 'general-purpose', 'coding'],
+    input: {
+      costPer1MTokens: 3,
+      maxTokens: 200_000,
+    },
+    output: {
+      costPer1MTokens: 15,
+      maxTokens: 64_000,
+    },
+  },
+  'claude-haiku-4-5-20251001': {
+    name: 'Claude Haiku 4.5',
+    description:
+      "Claude Haiku 4.5 is Anthropic's fastest and most efficient model, delivering near-frontier intelligence at a fraction of the cost and latency of larger Claude models. Matching Claude Sonnet 4's performance across reasoning, coding, and computer-use tasks, Haiku 4.5 brings frontier-level capability to real-time and high-volume applications.",
+    tags: ['recommended', 'agents', 'vision', 'general-purpose', 'coding'],
+    input: {
+      costPer1MTokens: 1,
+      maxTokens: 200_000,
+    },
+    output: {
+      costPer1MTokens: 5,
+      maxTokens: 64_000,
+    },
+  },
+  'claude-haiku-4-5-reasoning-20251001': {
+    name: 'Claude Haiku 4.5 (Reasoning Mode)',
+    description:
+      'This model uses the "Extended Thinking" mode and will use a significantly higher amount of output tokens than the Standard Mode, so this model should only be used for tasks that actually require it.\n\nClaude Haiku 4.5 is Anthropic\'s fastest and most efficient model, delivering near-frontier intelligence at a fraction of the cost and latency of larger Claude models. Matching Claude Sonnet 4\'s performance across reasoning, coding, and computer-use tasks, Haiku 4.5 brings frontier-level capability to real-time and high-volume applications.',
+    tags: ['recommended', 'reasoning', 'agents', 'vision', 'general-purpose', 'coding'],
+    input: {
+      costPer1MTokens: 1,
+      maxTokens: 200_000,
+    },
+    output: {
+      costPer1MTokens: 5,
+      maxTokens: 64_000,
+    },
+  },
+  'claude-sonnet-4-5-20250929': {
+    name: 'Claude Sonnet 4.5',
+    description:
+      "Claude Sonnet 4.5 is Anthropic's most advanced Sonnet model to date, optimized for real-world agents and coding workflows. It delivers state-of-the-art performance on coding benchmarks, with improvements across system design, code security, and specification adherence.",
+    tags: ['recommended', 'agents', 'vision', 'general-purpose', 'coding'],
+    input: {
+      costPer1MTokens: 3,
+      maxTokens: 200_000,
+    },
+    output: {
+      costPer1MTokens: 15,
+      maxTokens: 64_000,
+    },
+  },
+  'claude-sonnet-4-5-reasoning-20250929': {
+    name: 'Claude Sonnet 4.5 (Reasoning Mode)',
+    description:
+      'This model uses the "Extended Thinking" mode and will use a significantly higher amount of output tokens than the Standard Mode, so this model should only be used for tasks that actually require it.\n\nClaude Sonnet 4.5 is Anthropic\'s most advanced Sonnet model to date, optimized for real-world agents and coding workflows. It delivers state-of-the-art performance on coding benchmarks, with improvements across system design, code security, and specification adherence.',
+    tags: ['recommended', 'reasoning', 'agents', 'vision', 'general-purpose', 'coding'],
+    input: {
+      costPer1MTokens: 3,
+      maxTokens: 200_000,
+    },
+    output: {
+      costPer1MTokens: 15,
+      maxTokens: 64_000,
+    },
+  },
+  'claude-sonnet-4-20250514': {
+    name: 'Claude Sonnet 4',
+    description:
+      'Claude Sonnet 4 significantly enhances the capabilities of its predecessor, Sonnet 3.7, excelling in both coding and reasoning tasks with improved precision and controllability. Sonnet 4 balances capability and computational efficiency, making it suitable for a broad range of applications from routine coding tasks to complex software development projects. Key enhancements include improved autonomous codebase navigation, reduced error rates in agent-driven workflows, and increased reliability in following intricate instructions.',
+    tags: ['agents', 'vision', 'general-purpose', 'coding'],
+    input: {
+      costPer1MTokens: 3,
+      maxTokens: 200_000,
+    },
+    output: {
+      costPer1MTokens: 15,
+      maxTokens: 64_000,
+    },
+  },
+  'claude-sonnet-4-reasoning-20250514': {
+    name: 'Claude Sonnet 4 (Reasoning Mode)',
+    description:
+      'This model uses the "Extended Thinking" mode and will use a significantly higher amount of output tokens than the Standard Mode, so this model should only be used for tasks that actually require it.\n\nClaude Sonnet 4 significantly enhances the capabilities of its predecessor, Sonnet 3.7, excelling in both coding and reasoning tasks with improved precision and controllability. Sonnet 4 balances capability and computational efficiency, making it suitable for a broad range of applications from routine coding tasks to complex software development projects. Key enhancements include improved autonomous codebase navigation, reduced error rates in agent-driven workflows, and increased reliability in following intricate instructions.',
+    tags: ['vision', 'reasoning', 'general-purpose', 'agents', 'coding'],
+    input: {
+      costPer1MTokens: 3,
+      maxTokens: 200_000,
+    },
+    output: {
+      costPer1MTokens: 15,
+      maxTokens: 64_000,
+    },
+  },
+  'claude-3-5-sonnet-20241022': {
+    name: 'Claude 3.5 Sonnet (October 2024)',
+    description:
+      'Claude 3.5 Sonnet delivers better-than-Opus capabilities, faster-than-Sonnet speeds, at the same Sonnet prices. Sonnet is particularly good at coding, data science, visual processing, and agentic tasks.',
+    tags: ['vision', 'general-purpose', 'agents', 'coding', 'function-calling', 'storytelling'],
+    input: {
+      costPer1MTokens: 3,
+      maxTokens: 200_000,
+    },
+    output: {
+      costPer1MTokens: 15,
+      maxTokens: 8192,
+    },
+  },
+  'claude-3-5-sonnet-20240620': {
+    name: 'Claude 3.5 Sonnet (June 2024)',
+    description:
+      'Claude 3.5 Sonnet delivers better-than-Opus capabilities, faster-than-Sonnet speeds, at the same Sonnet prices. Sonnet is particularly good at coding, data science, visual processing, and agentic tasks.',
+    tags: ['vision', 'general-purpose', 'agents', 'coding', 'function-calling', 'storytelling'],
+    input: {
+      costPer1MTokens: 3,
+      maxTokens: 200_000,
+    },
+    output: {
+      costPer1MTokens: 15,
+      maxTokens: 4096,
+    },
+  },
+}
+
+export default new bp.Integration({
+  register: async () => {},
+  unregister: async () => {},
+  actions: {
+    generateContent: async ({ input, logger, metadata }) => {
+      const output = await generateContent(<llm.GenerateContentInput>input, anthropic, logger, {
+        models: LanguageModels,
+        defaultModel: DefaultModel,
+      })
+      metadata.setCost(output.botpress.cost)
+      return output
+    },
+    listLanguageModels: async ({}) => {
+      return {
+        models: Object.entries(LanguageModels).map(([id, model]) => ({ id: <ModelId>id, ...model })),
+      }
+    },
+  },
+  channels: {},
+  handler: async () => {},
+})

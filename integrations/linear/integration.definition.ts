@@ -1,0 +1,89 @@
+import { posthogHelper } from '@botpress/common'
+import { IntegrationDefinition } from '@botpress/sdk'
+import * as sdk from '@botpress/sdk'
+import proactiveConversation from 'bp_modules/proactive-conversation'
+import deletable from './bp_modules/deletable'
+import filesReadonly from './bp_modules/files-readonly'
+import listable from './bp_modules/listable'
+
+import { actions, channels, events, configuration, configurations, user, states, entities } from './definitions'
+
+export const INTEGRATION_NAME = 'linear'
+export const INTEGRATION_VERSION = '2.6.1'
+
+export default new IntegrationDefinition({
+  name: INTEGRATION_NAME,
+  version: INTEGRATION_VERSION,
+  title: 'Linear',
+  description:
+    'Manage your projects autonomously. Have your bot participate in discussions, manage issues and teams, and track progress.',
+  icon: 'icon.svg',
+  readme: 'hub.md',
+  configuration,
+  configurations,
+  channels,
+  identifier: {
+    extractScript: 'extract.vrl',
+  },
+  user,
+  actions,
+  events,
+  states,
+  entities,
+  secrets: {
+    CLIENT_ID: {
+      description: 'The client ID of your Linear OAuth app.',
+    },
+    CLIENT_SECRET: {
+      description: 'The client secret of your Linear OAuth app.',
+    },
+    DESK_CLIENT_ID: {
+      description: 'The client ID of your Linear OAuth app.',
+    },
+    DESK_CLIENT_SECRET: {
+      description: 'The client secret of your Linear OAuth app.',
+    },
+    WEBHOOK_SIGNING_SECRET: {
+      description: 'The signing secret of your Linear webhook.',
+    },
+    ...posthogHelper.COMMON_SECRET_NAMES,
+  },
+  attributes: {
+    category: 'Project Management',
+    repo: 'botpress',
+  },
+})
+  .extend(listable, ({ entities }) => ({
+    entities: { item: entities.issue },
+    actions: {
+      list: { name: 'issueList' },
+    },
+  }))
+  .extend(deletable, ({ entities }) => ({
+    entities: { item: entities.issue },
+    actions: {
+      delete: { name: 'issueDelete' },
+    },
+    events: {
+      deleted: { name: 'issueDeleted' },
+    },
+  }))
+  .extend(proactiveConversation, ({ entities }) => ({
+    entities: {
+      conversation: entities.issueConversation,
+    },
+    actions: { getOrCreateConversation: { name: 'getOrCreateIssueConversation' } },
+  }))
+  .extend(filesReadonly, ({}) => ({
+    entities: {},
+    actions: {
+      listItemsInFolder: {
+        name: 'filesReadonlyListItemsInFolder',
+        attributes: { ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO },
+      },
+      transferFileToBotpress: {
+        name: 'filesReadonlyTransferFileToBotpress',
+        attributes: { ...sdk.WELL_KNOWN_ATTRIBUTES.HIDDEN_IN_STUDIO },
+      },
+    },
+  }))

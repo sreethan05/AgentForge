@@ -1,0 +1,20 @@
+{
+  "name": "@botpresshub/pdf-generator",
+  "scripts": {
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "build": "bp add -y && bp build",
+    "test": "vitest --run"
+  },
+  "private": true,
+  "dependencies": {
+    "@botpress/sdk": "workspace:*",
+    "axios": "^1.7.2",
+    "marked": "^15.0.1"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*"
+  }
+}

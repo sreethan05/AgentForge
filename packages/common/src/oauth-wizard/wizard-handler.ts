@@ -1,0 +1,163 @@
+import { Response, RuntimeError, z, OAUTH_IDENTIFIER_HEADER } from '@botpress/sdk'
+import * as preact from 'preact-render-to-string'
+import * as htmlDialogs from '../html-dialogs'
+import * as consts from './consts'
+import { generateRedirection, getInterstitialUrl } from './interstitial'
+import { schemaToFieldDescriptors } from './schema-to-fields'
+import type * as types from './types'
+
+export class OAuthWizard<THandlerProps extends types.HandlerProps> {
+  private readonly _steps: Map<string, types.WizardStep<THandlerProps>>
+  private readonly _handlerProps: THandlerProps
+
+  public constructor({
+    steps,
+    handlerProps,
+  }: {
+    steps: Map<string, types.WizardStep<THandlerProps>>
+    handlerProps: THandlerProps
+  }) {
+    this._steps = steps
+    this._handlerProps = handlerProps
+  }
+
+  public async handleRequest(): Promise<Response> {
+    if (!isOAuthWizardUrl(this._handlerProps.req.path)) {
+      throw new RuntimeError('Invalid OAuth wizard URL')
+    }
+
+    const searchParams = new URLSearchParams(this._handlerProps.req.query)
+    const stepId = this._handlerProps.req.path.slice(consts.BASE_WIZARD_PATH.length)
+    const step = this._steps.get(stepId)
+
+    if (!step) {
+      throw new RuntimeError(`Unknown step ID: ${stepId}`)
+    }
+
+    const formValues: Record<string, string | number | boolean> = {}
+    const formParams = this._handlerProps.req.body ? new URLSearchParams(this._handlerProps.req.body) : searchParams
+    for (const [key, value] of formParams.entries()) {
+      if (key.startsWith(consts.FORM_PARAM_PREFIX)) {
+        formValues[key.slice(consts.FORM_PARAM_PREFIX.length)] = value
+      }
+    }
+
+    const rawSchemaJson = formParams.get(consts.FORM_SCHEMA_PARAM)
+    if (rawSchemaJson && Object.keys(formValues).length > 0) {
+      const jsonSchema = JSON.parse(rawSchemaJson) as { properties?: Record<string, { type?: string }> }
+      const coercedShape: Record<string, z.ZodType> = {}
+      for (const name of Object.keys(formValues)) {
+        const fieldType = jsonSchema.properties?.[name]?.type
+        if (fieldType === 'boolean') {
+          coercedShape[name] = z.coerce.boolean()
+        } else if (fieldType === 'number' || fieldType === 'integer') {
+          coercedShape[name] = z.coerce.number()
+        } else {
+          coercedShape[name] = z.coerce.string()
+        }
+      }
+      const coerced = z.object(coercedShape).safeParse(formValues)
+      if (coerced.success) {
+        Object.assign(formValues, coerced.data)
+      }
+    }
+
+    const extraHeaders: Record<string, string> = {}
+
+    const response = await step.handler({
+      ...this._handlerProps,
+      query: searchParams,
+      selectedChoice: searchParams.get(consts.CHOICE_PARAM) ?? undefined,
+      selectedChoices:
+        searchParams.getAll(consts.CHOICE_PARAM).length > 0 ? searchParams.getAll(consts.CHOICE_PARAM) : undefined,
+      inputValue: searchParams.get(consts.INPUT_PARAM) ?? undefined,
+      formValues: Object.keys(formValues).length > 0 ? formValues : undefined,
+      setIntegrationIdentifier(identifier: string) {
+        extraHeaders[OAUTH_IDENTIFIER_HEADER] = identifier
+      },
+      responses: {
+        displayButtons: ({ buttons, pageTitle, htmlOrMarkdownPageContents }) =>
+          htmlDialogs.generateButtonDialog({
+            pageTitle,
+            helpText: htmlOrMarkdownPageContents,
+            buttons: buttons.map((button) => ({
+              type: button.buttonType ?? 'primary',
+              label: button.label,
+              ...(button.action === 'close'
+                ? { closeWindow: true }
+                : button.action === 'navigate'
+                  ? { navigateTo: getWizardStepUrl(button.navigateToStep, this._handlerProps.ctx) }
+                  : button.action === 'external'
+                    ? { navigateTo: new URL(button.navigateToUrl) }
+                    : { navigateTo: new URL(`javascript:${button.callFunction}()`) }),
+            })),
+          }),
+        displayChoices: ({ choices, nextStepId, pageTitle, htmlOrMarkdownPageContents, multiple, defaultValues }) =>
+          htmlDialogs.generateSelectDialog({
+            formFieldName: consts.CHOICE_PARAM,
+            formSubmitUrl: getWizardStepUrl(nextStepId, this._handlerProps.ctx),
+            pageTitle,
+            helpText: htmlOrMarkdownPageContents,
+            extraHiddenParams: {
+              state: this._handlerProps.ctx.webhookId,
+            },
+            options: choices.map((choice) => ({
+              label: choice.label,
+              value: choice.value,
+            })),
+            multiple,
+            defaultValues,
+          }),
+        displayInput: ({ input, nextStepId, pageTitle, htmlOrMarkdownPageContents }) =>
+          htmlDialogs.generateInputDialog({
+            formFieldName: consts.INPUT_PARAM,
+            formSubmitUrl: getWizardStepUrl(nextStepId, this._handlerProps.ctx),
+            pageTitle,
+            helpText: htmlOrMarkdownPageContents,
+            extraHiddenParams: {
+              state: this._handlerProps.ctx.webhookId,
+            },
+            inputConfig: {
+              label: input.label,
+              type: input.type,
+            },
+          }),
+        displayForm: ({ schema, nextStepId, pageTitle, htmlOrMarkdownPageContents, errors, previousValues }) =>
+          htmlDialogs.generateFormDialog({
+            pageTitle,
+            helpText: htmlOrMarkdownPageContents,
+            formSubmitUrl: getWizardStepUrl(nextStepId, this._handlerProps.ctx),
+            formParamPrefix: consts.FORM_PARAM_PREFIX,
+            fields: schemaToFieldDescriptors(schema, errors, previousValues),
+            extraHiddenParams: {
+              state: this._handlerProps.ctx.webhookId,
+              [consts.FORM_SCHEMA_PARAM]: JSON.stringify(schema.toJSONSchema()),
+            },
+          }),
+        displayCustom: ({ pageTitle, body }) =>
+          htmlDialogs.generateRawHtmlDialog({
+            pageTitle,
+            bodyHtml: preact.render(body),
+          }),
+        redirectToStep: (stepId) => generateRedirection(getWizardStepUrl(stepId, this._handlerProps.ctx)),
+        redirectToExternalUrl: (url) => generateRedirection(new URL(url)),
+        endWizard: (result) =>
+          generateRedirection(getInterstitialUrl(result.success, result.success ? undefined : result.errorMessage)),
+      },
+    })
+
+    return {
+      ...response,
+      headers: {
+        ...response.headers,
+        ...extraHeaders,
+      },
+    }
+  }
+}
+
+export const getWizardStepUrl = (stepId: string, ctx?: { webhookId: string }): URL =>
+  new URL(`${consts.BASE_WIZARD_PATH}${stepId}${ctx ? `?state=${ctx.webhookId}` : ''}`, process.env.BP_WEBHOOK_URL)
+
+export const isOAuthWizardUrl = (path: string): path is (typeof consts)['BASE_WIZARD_PATH'] =>
+  path.startsWith(consts.BASE_WIZARD_PATH)

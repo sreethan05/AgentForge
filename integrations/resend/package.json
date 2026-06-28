@@ -1,0 +1,22 @@
+{
+  "name": "@botpresshub/resend",
+  "scripts": {
+    "build": "bp add -y && bp build",
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "test": "vitest --run"
+  },
+  "private": true,
+  "dependencies": {
+    "@botpress/client": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "markdown-it": "^14.1.0",
+    "resend": "^4.6.0",
+    "svix": "^1.69.0"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@types/markdown-it": "^14.1.2"
+  }
+}

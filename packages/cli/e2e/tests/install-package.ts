@@ -1,0 +1,508 @@
+import * as client from '@botpress/client'
+import * as sdk from '@botpress/sdk'
+import * as fslib from 'fs'
+import * as pathlib from 'path'
+import * as uuid from 'uuid'
+import impl from '../../src'
+import * as apiUtils from '../../src/api'
+import * as consts from '../../src/consts'
+import * as cliUtils from '../../src/utils'
+import { ApiBot, fetchAllBots } from '../api'
+import defaults from '../defaults'
+import * as retry from '../retry'
+import { Test, TestProps } from '../typings'
+import * as utils from '../utils'
+
+const issueSchema = sdk.z.object({
+  id: sdk.z.string(),
+  priority: sdk.z.enum(['high', 'medium', 'low']),
+  title: sdk.z.string(),
+  body: sdk.z.string(),
+})
+const INTEGRATION = {
+  version: '0.0.1',
+  title: 'An Integration',
+  description: 'An integration',
+  user: { tags: { id: { title: 'ID', description: 'The user ID' } } },
+  configuration: { schema: sdk.z.object({}), identifier: { required: true, linkTemplateScript: '' } },
+  configurations: {
+    token: {
+      title: 'API Token',
+      description: 'The token to authenticate with',
+      schema: sdk.z.object({ token: sdk.z.string() }),
+    },
+  },
+  actions: {
+    getIssue: {
+      input: { schema: sdk.z.object({ id: sdk.z.string() }) },
+      output: { schema: issueSchema },
+    },
+  },
+  events: {
+    issueCreated: {
+      title: 'Issue Created',
+      description: 'An issue was created',
+      schema: issueSchema,
+    },
+  },
+  channels: {
+    issueComment: {
+      title: 'Issue Comment',
+      description: 'Comment on an issue',
+      messages: { text: sdk.messages.defaults.text },
+      conversation: { tags: { id: { title: 'ID', description: 'The issue ID' } } },
+      message: { tags: { id: { title: 'ID', description: 'The issue comment ID' } } },
+    },
+  },
+  entities: {
+    issue: {
+      title: 'Issue',
+      description: 'An issue',
+      schema: issueSchema,
+    },
+  },
+  states: {
+    lastCreatedIssue: {
+      type: 'integration',
+      schema: issueSchema,
+    },
+  },
+  identifier: {
+    extractScript: '',
+  },
+} satisfies Omit<sdk.IntegrationDefinitionProps, 'name'>
+
+const getHomeDir = (props: { tmpDir: string }) => pathlib.join(props.tmpDir, '.botpresshome')
+const initBot = async (props: TestProps, definitionFile: string) => {
+  const { tmpDir, dependencies, ...creds } = props
+  const argv = {
+    ...defaults,
+    botpressHome: getHomeDir(props),
+    confirm: true,
+    ...creds,
+  }
+  const botName = uuid.v4().replace(/-/g, '')
+  const botDir = pathlib.join(tmpDir, botName)
+  await impl
+    .init({ ...argv, workDir: tmpDir, name: botName, type: 'bot', template: 'empty' })
+    .then(utils.handleExitCode)
+  await utils.fixBotpressDependencies({ workDir: botDir, target: dependencies })
+  await utils.npmInstall({ workDir: botDir }).then(utils.handleExitCode)
+  await fslib.promises.writeFile(pathlib.join(botDir, 'bot.definition.ts'), definitionFile)
+  return { botDir }
+}
+
+// TODO: add an equivalent test with an interface once interfaces can be created by any workspace
+
+export const addIntegration: Test = {
+  name: 'cli should allow installing an integration',
+  handler: async (props) => {
+    const { tmpDir, workspaceHandle, logger, ...creds } = props
+    const argv = {
+      ...defaults,
+      botpressHome: getHomeDir({ tmpDir }),
+      confirm: true,
+      ...creds,
+    }
+
+    const bpClient = new client.Client({
+      apiUrl: creds.apiUrl,
+      token: creds.token,
+      workspaceId: creds.workspaceId,
+      retry: retry.config,
+    })
+
+    const integrationSuffix = uuid.v4().replace(/-/g, '')
+    const name = `myintegration${integrationSuffix}`
+    const integrationName = `${workspaceHandle}/${name}`
+
+    const createIntegrationBody = await apiUtils.prepareCreateIntegrationBody(
+      new sdk.IntegrationDefinition({
+        ...INTEGRATION,
+        name: integrationName,
+      })
+    )
+
+    const { integration } = await bpClient.createIntegration({
+      ...createIntegrationBody,
+      dev: true, // this way we ensure the integration will eventually be janitored if the test fails
+      url: creds.apiUrl,
+    })
+
+    try {
+      logger.info('Initializing bot')
+      const { botDir } = await initBot(
+        props,
+        [
+          'import * as sdk from "@botpress/sdk"',
+          `import anIntegration from "./bp_modules/${workspaceHandle}-${name}"`,
+          'export default new sdk.BotDefinition({}).addIntegration(anIntegration, {',
+          '  enabled: true,',
+          '  configurationType: null,',
+          '  configuration: {},',
+          '})',
+        ].join('\n')
+      )
+
+      logger.info('Logging in')
+      await impl.login(argv).then(utils.handleExitCode)
+
+      logger.info('Installing integration')
+      await impl
+        .add({
+          ...argv,
+          installPath: botDir,
+          packageRef: integration.id,
+          useDev: false,
+          alias: undefined,
+        })
+        .then(utils.handleExitCode)
+
+      logger.info('Building bot')
+      await impl.build({ ...argv, workDir: botDir }).then(utils.handleExitCode)
+      await utils.tscCheck({ workDir: botDir }).then(utils.handleExitCode)
+    } finally {
+      await impl.integrations
+        .delete({
+          ...argv,
+          integrationRef: integration.id,
+        })
+        .catch(() => {
+          logger.warn(`Failed to delete integration ${integration.id}`) // this is not the purpose of the test
+        })
+    }
+  },
+}
+
+export const addPlugin: Test = {
+  name: 'cli should allow installing a plugin',
+  handler: async (props) => {
+    const { tmpDir, workspaceHandle, logger, ...creds } = props
+    const argv = {
+      ...defaults,
+      botpressHome: getHomeDir({ tmpDir }),
+      confirm: true,
+      ...creds,
+    }
+
+    const bpClient = new client.Client({
+      apiUrl: creds.apiUrl,
+      token: creds.token,
+      workspaceId: creds.workspaceId,
+      retry: retry.config,
+    })
+
+    const pluginSuffix = uuid.v4().replace(/-/g, '')
+    const name = `myplugin${pluginSuffix}`
+    const pluginName = `${workspaceHandle}/${name}`
+    const pluginVersion = '0.1.0'
+    const pluginAlias = `alias-${uuid.v4().replace(/-/g, '')}`
+    const botName = uuid.v4()
+
+    const createPluginBody = await apiUtils.prepareCreatePluginBody(
+      new sdk.PluginDefinition({
+        name: pluginName,
+        version: pluginVersion,
+      })
+    )
+
+    const { plugin } = await bpClient.createPlugin({
+      ...createPluginBody,
+      code: { browser: 'export default {}', node: 'export default {}' },
+    })
+
+    let bot: ApiBot | undefined
+
+    try {
+      logger.info('Initializing bot')
+      const { botDir } = await initBot(
+        props,
+        [
+          'import * as sdk from "@botpress/sdk"',
+          `import aPlugin from "./bp_modules/${workspaceHandle}-${name}"`,
+          'export default new sdk.BotDefinition({}).addPlugin(aPlugin, {',
+          `  alias: '${pluginAlias}',`,
+          '  configuration: {},',
+          '  dependencies: {},',
+          '})',
+        ].join('\n')
+      )
+
+      logger.info('Logging in')
+      await impl.login(argv).then(utils.handleExitCode)
+
+      logger.info('Installing plugin')
+      await impl
+        .add({
+          ...argv,
+          installPath: botDir,
+          packageRef: plugin.id,
+          useDev: false,
+          alias: undefined,
+        })
+        .then(utils.handleExitCode)
+
+      logger.info('Building bot')
+      await impl.build({ ...argv, workDir: botDir }).then(utils.handleExitCode)
+      await utils.tscCheck({ workDir: botDir }).then(utils.handleExitCode)
+
+      logger.info('Deploying bot')
+      await impl.bots.create({ ...argv, name: botName, ifNotExists: false }).then(utils.handleExitCode)
+
+      bot = await fetchBot(bpClient, botName)
+      if (!bot) {
+        throw new Error(`Bot ${botName} should have been created`)
+      }
+
+      await impl.deploy({ ...argv, workDir: botDir, createNewBot: false, botId: bot.id }).then(utils.handleExitCode)
+
+      logger.info('Checking if plugin is installed')
+      const plugins = await bpClient.getBot({ id: bot.id }).then(({ bot }) => bot.plugins)
+
+      const isPluginInstalled = Object.entries(plugins).some(
+        ([alias, instance]) => alias === pluginAlias && instance.id === plugin.id
+      )
+
+      if (!isPluginInstalled) {
+        throw new Error(`Plugin ${plugin.id} should have been installed in bot ${bot.id}`)
+      }
+    } finally {
+      if (bot) {
+        await impl.bots
+          .delete({
+            ...argv,
+            botRef: bot.id,
+          })
+          .catch(() => {
+            logger.warn(`Failed to delete bot ${bot!.id}`) // this is not the purpose of the test
+          })
+      }
+      await impl.plugins
+        .delete({
+          ...argv,
+          pluginRef: plugin.id,
+        })
+        .catch(() => {
+          logger.warn(`Failed to delete plugin ${plugin.id}`) // this is not the purpose of the test
+        })
+    }
+  },
+}
+
+const fetchBot = async (client: client.Client, botName: string): Promise<ApiBot | undefined> =>
+  await fetchAllBots(client).then((bots) => bots.find(({ name }) => name === botName))
+
+const initIntegration = async (props: TestProps, integrationName: string) => {
+  const { tmpDir, dependencies, workspaceHandle, ...creds } = props
+  const argv = {
+    ...defaults,
+    botpressHome: getHomeDir({ tmpDir }),
+    confirm: true,
+    ...creds,
+  }
+  const integrationDir = pathlib.join(tmpDir, integrationName)
+  await impl
+    .init({
+      ...argv,
+      workDir: tmpDir,
+      name: `${workspaceHandle}/${integrationName}`,
+      type: 'integration',
+      template: 'empty',
+    })
+    .then(utils.handleExitCode)
+  await utils.fixBotpressDependencies({ workDir: integrationDir, target: dependencies })
+  await utils.npmInstall({ workDir: integrationDir }).then(utils.handleExitCode)
+  return { integrationDir }
+}
+
+export const addLocalIntegrationKeepsRelativePath: Test = {
+  name: 'cli should store the original relative path in bpDependencies when adding a local integration',
+  handler: async (props) => {
+    const { tmpDir, logger, workspaceHandle, ...creds } = props
+    const argv = {
+      ...defaults,
+      botpressHome: getHomeDir({ tmpDir }),
+      confirm: true,
+      workspaceHandle,
+      ...creds,
+    }
+
+    const integrationName = `myintegration${utils.getUUID()}`
+    const fullIntegrationName = `${workspaceHandle}/${integrationName}`
+    const { integrationDir } = await initIntegration(props, integrationName)
+
+    logger.info('Initializing bot')
+    const { botDir } = await initBot(
+      props,
+      ['import * as sdk from "@botpress/sdk"', 'export default new sdk.BotDefinition({})'].join('\n')
+    )
+
+    // The stored path should be relative to installPath (botDir), not process.cwd()
+    // Use integrationDir (absolute) as packageRef to avoid cross-drive issues on Windows
+    const rel = pathlib.relative(botDir, integrationDir).split(pathlib.sep).join('/')
+    const expectedStoredPath = rel.startsWith('.') ? rel : `./${rel}`
+
+    logger.info('Adding local integration via relative path')
+    await impl
+      .add({ ...argv, installPath: botDir, packageRef: integrationDir, useDev: false, alias: undefined })
+      .then(utils.handleExitCode)
+
+    const pkgJson = JSON.parse(fslib.readFileSync(pathlib.join(botDir, 'package.json'), 'utf8'))
+    const bpDeps = pkgJson.bpDependencies as Record<string, string> | undefined
+    if (!bpDeps) {
+      throw new Error('Expected bpDependencies to be set in package.json after bp add')
+    }
+    const storedPath = bpDeps[fullIntegrationName]
+    if (storedPath !== expectedStoredPath) {
+      throw new Error(`Expected bpDependencies to store "${expectedStoredPath}" but got "${storedPath}"`)
+    }
+  },
+}
+
+export const addDevIntegrationSkipsBpDependencies: Test = {
+  name: 'cli should not modify bpDependencies when adding a local integration with --use-dev',
+  handler: async (props) => {
+    const { tmpDir, logger, workspaceHandle, ...creds } = props
+    const argv = {
+      ...defaults,
+      botpressHome: getHomeDir({ tmpDir }),
+      confirm: true,
+      workspaceHandle,
+      ...creds,
+    }
+
+    const integrationName = `myintegration${utils.getUUID()}`
+    const fullIntegrationName = `${workspaceHandle}/${integrationName}`
+    const { integrationDir } = await initIntegration(props, integrationName)
+
+    // Simulate a dev integration by writing a devId to the project cache
+    const cacheDir = pathlib.join(integrationDir, '.botpress')
+    fslib.mkdirSync(cacheDir, { recursive: true })
+    fslib.writeFileSync(
+      pathlib.join(cacheDir, 'project.cache.json'),
+      JSON.stringify({ devId: 'fake-dev-integration-id' })
+    )
+
+    logger.info('Initializing bot')
+    const { botDir } = await initBot(
+      props,
+      ['import * as sdk from "@botpress/sdk"', 'export default new sdk.BotDefinition({})'].join('\n')
+    )
+
+    logger.info('Adding dev integration')
+    await impl
+      .add({ ...argv, installPath: botDir, packageRef: integrationDir, useDev: true, alias: undefined })
+      .then(utils.handleExitCode)
+
+    const pkgJson = JSON.parse(fslib.readFileSync(pathlib.join(botDir, 'package.json'), 'utf8'))
+    const bpDeps = pkgJson.bpDependencies as Record<string, string> | undefined
+    if (bpDeps?.[fullIntegrationName] !== undefined) {
+      throw new Error(
+        `Expected "${fullIntegrationName}" to NOT be in bpDependencies when using --use-dev, but got: ${JSON.stringify(bpDeps)}`
+      )
+    }
+  },
+}
+
+export const addDevIntegrationPreservesExistingBpDependency: Test = {
+  name: 'cli should not overwrite existing bpDependencies entry when re-adding as dev integration',
+  handler: async (props) => {
+    const { tmpDir, logger, workspaceHandle, ...creds } = props
+    const argv = {
+      ...defaults,
+      botpressHome: getHomeDir({ tmpDir }),
+      confirm: true,
+      workspaceHandle,
+      ...creds,
+    }
+
+    const integrationName = `myintegration${utils.getUUID()}`
+    const fullIntegrationName = `${workspaceHandle}/${integrationName}`
+    const { integrationDir } = await initIntegration(props, integrationName)
+
+    logger.info('Initializing bot')
+    const { botDir } = await initBot(
+      props,
+      ['import * as sdk from "@botpress/sdk"', 'export default new sdk.BotDefinition({})'].join('\n')
+    )
+
+    logger.info('Adding local integration (no --use-dev) to populate bpDependencies')
+    await impl
+      .add({ ...argv, installPath: botDir, packageRef: integrationDir, useDev: false, alias: undefined })
+      .then(utils.handleExitCode)
+
+    const pkgJsonAfterFirst = JSON.parse(fslib.readFileSync(pathlib.join(botDir, 'package.json'), 'utf8'))
+    const storedRelativePath = (pkgJsonAfterFirst.bpDependencies as Record<string, string> | undefined)?.[
+      fullIntegrationName
+    ]
+    if (!storedRelativePath) {
+      throw new Error('Expected bpDependencies to contain an entry after initial bp add')
+    }
+
+    // Simulate the integration being run with bp dev (devId present in cache)
+    const cacheDir = pathlib.join(integrationDir, '.botpress')
+    fslib.mkdirSync(cacheDir, { recursive: true })
+    fslib.writeFileSync(
+      pathlib.join(cacheDir, 'project.cache.json'),
+      JSON.stringify({ devId: 'fake-dev-integration-id' })
+    )
+
+    logger.info('Re-adding same integration with --use-dev')
+    await impl
+      .add({ ...argv, installPath: botDir, packageRef: integrationDir, useDev: true, alias: undefined })
+      .then(utils.handleExitCode)
+
+    const pkgJsonAfterDev = JSON.parse(fslib.readFileSync(pathlib.join(botDir, 'package.json'), 'utf8'))
+    const bpDepsAfterDev = pkgJsonAfterDev.bpDependencies as Record<string, string> | undefined
+    if (bpDepsAfterDev?.[fullIntegrationName] !== storedRelativePath) {
+      throw new Error(
+        `Expected bpDependencies["${fullIntegrationName}"] to remain "${storedRelativePath}" after --use-dev add, but got: ${JSON.stringify(bpDepsAfterDev?.[fullIntegrationName])}`
+      )
+    }
+  },
+}
+
+export const reinstallLocalIntegration: Test = {
+  name: 'cli should reinstall local integration from bpDependencies regardless of cwd',
+  handler: async (props) => {
+    const { tmpDir, logger, workspaceHandle, ...creds } = props
+    const argv = {
+      ...defaults,
+      botpressHome: getHomeDir({ tmpDir }),
+      confirm: true,
+      ...creds,
+    }
+
+    const integrationName = `myintegration${utils.getUUID()}`
+    const fullIntegrationName = `${workspaceHandle}/${integrationName}`
+    const { integrationDir } = await initIntegration(props, integrationName)
+
+    logger.info('Initializing bot')
+    const { botDir } = await initBot(
+      props,
+      ['import * as sdk from "@botpress/sdk"', 'export default new sdk.BotDefinition({})'].join('\n')
+    )
+
+    logger.info('Adding local integration')
+    await impl
+      .add({ ...argv, installPath: botDir, packageRef: integrationDir, useDev: false, alias: undefined })
+      .then(utils.handleExitCode)
+
+    const moduleDir = pathlib.join(botDir, consts.installDirName, cliUtils.casing.to.kebabCase(fullIntegrationName))
+    if (!fslib.existsSync(moduleDir)) {
+      throw new Error(`Expected bp_modules to contain "${fullIntegrationName}" after bp add`)
+    }
+
+    logger.info('Deleting bp_modules')
+    fslib.rmSync(pathlib.join(botDir, 'bp_modules'), { recursive: true, force: true })
+
+    logger.info('Reinstalling from bpDependencies')
+    await impl
+      .add({ ...argv, installPath: botDir, packageRef: undefined, useDev: false, alias: undefined })
+      .then(utils.handleExitCode)
+
+    if (!fslib.existsSync(moduleDir)) {
+      throw new Error(`Expected bp_modules to contain "${fullIntegrationName}" after reinstall`)
+    }
+  },
+}

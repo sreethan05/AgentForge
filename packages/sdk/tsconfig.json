@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noErrorTruncation": true
+  },
+  "include": ["src/**/*", "*.ts"],
+  "exclude": ["dist"]
+}

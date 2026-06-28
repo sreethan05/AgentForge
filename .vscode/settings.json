@@ -1,0 +1,12 @@
+{
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "editor.tabSize": 2,
+  "git.branchProtection": ["master"],
+  "vitest.disableWorkspaceWarning": true,
+  "js/ts.tsdk.path": "node_modules/typescript/lib"
+}

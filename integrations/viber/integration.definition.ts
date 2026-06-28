@@ -1,0 +1,47 @@
+import { z, IntegrationDefinition, messages } from '@botpress/sdk'
+
+export default new IntegrationDefinition({
+  name: 'viber',
+  version: '1.0.6',
+  title: 'Viber',
+  description: 'Send and receive SMS messages.',
+  icon: 'icon.svg',
+  readme: 'hub.md',
+  configuration: {
+    schema: z.object({
+      authToken: z.string().min(1).title('Auth Token').describe('The authorization token'),
+      botName: z.string().min(1).title('Bot Name').describe("The bot's name"),
+      botAvatar: z.string().min(1).title('Bot Avatar').describe("The bot's avatar"),
+    }),
+  },
+  channels: {
+    channel: {
+      title: 'Viber conversation',
+      description: 'Channel for a Viber conversation',
+      messages: { ...messages.defaults, bloc: messages.markdownBloc },
+      message: {
+        tags: {
+          id: { title: 'Message ID', description: 'Viber message ID' },
+        },
+      },
+      conversation: {
+        tags: {
+          id: { title: 'User ID', description: 'Viber user ID taking part in the conversation' },
+        },
+      },
+    },
+  },
+  actions: {},
+  events: {},
+
+  user: {
+    tags: {
+      id: { title: 'User ID', description: 'Viber user ID' },
+    },
+  },
+  attributes: {
+    category: 'Communication & Channels',
+    guideSlug: 'viber',
+    repo: 'botpress',
+  },
+})

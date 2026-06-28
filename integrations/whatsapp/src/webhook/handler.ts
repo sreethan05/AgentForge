@@ -1,0 +1,193 @@
+import { Request } from '@botpress/sdk'
+import * as crypto from 'crypto'
+import { getClientSecret } from '../auth'
+import { WhatsAppPayload, WhatsAppPayloadSchema } from '../misc/types'
+import { echoHandler } from './handlers/echo'
+import { messagesHandler } from './handlers/messages'
+import { oauthCallbackHandler } from './handlers/oauth'
+import { reactionHandler } from './handlers/reaction'
+import { isSandboxCommand, sandboxHandler } from './handlers/sandbox'
+import { statusHandler } from './handlers/status'
+import { subscribeHandler } from './handlers/subscribe'
+import * as bp from '.botpress'
+
+const _handler: bp.IntegrationProps['handler'] = async (props: bp.HandlerProps) => {
+  const { req, logger, client } = props
+  if (req.path.startsWith('/oauth')) {
+    return await oauthCallbackHandler(props)
+  }
+
+  if (isSandboxCommand(props)) {
+    return await sandboxHandler(props)
+  }
+
+  logger.debug('Received request with body:', req.body ?? '[empty]')
+  const queryParams = new URLSearchParams(req.query)
+  if (queryParams.has('hub.mode')) {
+    return await subscribeHandler(props)
+  }
+
+  const validationResult = _validateRequestAuthentication(req, props)
+  if (validationResult.error) {
+    return { status: 401, body: validationResult.message }
+  }
+
+  if (!req.body) {
+    logger.debug('Handler received an empty body, so the message was ignored')
+    return
+  }
+
+  let payload: WhatsAppPayload
+  try {
+    const data = JSON.parse(req.body)
+    payload = WhatsAppPayloadSchema.parse(data)
+  } catch (e: any) {
+    logger.debug('Error while handling request:', e)
+    return { status: 500, body: 'Error while handling request: ' + e.message }
+  }
+
+  const changes = payload.entry[0]?.changes[0]
+  if (!changes) {
+    logger.debug('No changes found in the payload, ignoring message')
+    return
+  }
+  if (!changes.value) {
+    logger.debug('No value found in the payload, ignoring message')
+    return
+  }
+
+  switch (changes.field) {
+    case 'smb_message_echoes':
+      for (const echo of changes.value.message_echoes) {
+        try {
+          await echoHandler(echo, changes.value, props)
+        } catch (thrown: unknown) {
+          const errMsg = thrown instanceof Error ? thrown.message : 'Unknown error thrown'
+          logger.forBot().error(`Failed to process WhatsApp echo event: ${errMsg}`)
+        }
+      }
+      break
+    case 'messages':
+      for (const message of changes.value.messages ?? []) {
+        if (message.type === 'reaction') {
+          await reactionHandler(message, props)
+        } else {
+          await messagesHandler(message, changes.value, props)
+        }
+      }
+      for (const status of changes.value.statuses ?? []) {
+        try {
+          await statusHandler(status, props)
+        } catch (thrown: unknown) {
+          const errMsg = thrown instanceof Error ? thrown.message : 'Unknown error thrown'
+          logger.forBot().error(`Failed to process WhatsApp status event: ${errMsg}`)
+        }
+      }
+      break
+    case 'message_template_components_update':
+      await client.createEvent({
+        type: 'messageTemplateComponentsUpdate',
+        payload: {
+          id: changes.value.message_template_id,
+          name: changes.value.message_template_name,
+          language: changes.value.message_template_language,
+          element: changes.value.message_template_element,
+          title: changes.value.message_template_title,
+          footer: changes.value.message_template_footer,
+          buttons: changes.value.message_template_buttons?.map((button) => ({
+            button_type: button.message_template_button_type,
+            button_text: button.message_template_button_text,
+            button_url: button.message_template_button_url,
+            button_phone_number: button.message_template_button_phone_number,
+          })),
+        },
+      })
+      break
+    case 'message_template_quality_update':
+      await client.createEvent({
+        type: 'messageTemplateQualityUpdate',
+        payload: {
+          ...changes.value,
+          id: changes.value.message_template_id,
+          name: changes.value.message_template_name,
+          language: changes.value.message_template_language,
+        },
+      })
+      break
+    case 'message_template_status_update':
+      await client.createEvent({
+        type: 'messageTemplateStatusUpdate',
+        payload: {
+          ...changes.value,
+          id: changes.value.message_template_id,
+          name: changes.value.message_template_name,
+          language: changes.value.message_template_language,
+        },
+      })
+      break
+    case 'template_category_update':
+      await client.createEvent({
+        type: 'templateCategoryUpdate',
+        payload: {
+          ...changes.value,
+          id: changes.value.message_template_id,
+          name: changes.value.message_template_name,
+          language: changes.value.message_template_language,
+        },
+      })
+      break
+    default:
+      logger.forBot().info('The event sent to the bot is not yet handled by botpress.')
+  }
+}
+
+const _validateRequestAuthentication = (
+  req: Request,
+  { ctx }: { ctx: bp.Context }
+): { error: true; message: string } | { error: false } => {
+  const secret = getClientSecret(ctx)
+  if (!secret) {
+    return { error: false }
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(req.body ?? '')
+    .digest('hex')
+  const signature = req.headers['x-hub-signature-256']?.split('=')[1]
+  if (signature !== expectedSignature) {
+    return {
+      error: true,
+      message: `Invalid signature (got ${signature ?? 'none'}, expected ${expectedSignature}).\n${_getSecretErrorText(secret)}`,
+    }
+  }
+  return { error: false }
+}
+
+const _getSecretErrorText = (secret: string): string => {
+  let bpClientSecretText = undefined
+  if (secret === bp.secrets.SANDBOX_CLIENT_SECRET) {
+    bpClientSecretText = 'The sandbox'
+  }
+  if (secret === bp.secrets.CLIENT_SECRET) {
+    bpClientSecretText = 'The OAuth'
+  }
+  return `${bpClientSecretText ? bpClientSecretText : 'A manual configured'} client secret was used to validate the signature`
+}
+
+const _handlerWrapper: typeof _handler = async (props: bp.HandlerProps) => {
+  try {
+    const response = await _handler(props)
+    if (response?.status && response.status !== 200) {
+      props.logger.error(`WhatsApp handler failed with status ${response.status}: ${response.body}`)
+    }
+    return response
+  } catch (thrown: unknown) {
+    const errMsg = thrown instanceof Error ? thrown.message : 'Unknown error thrown'
+    const errorMessage = `Webhook handler failed with error: ${errMsg}`
+    props.logger.error(errorMessage)
+    return { status: 500, body: errorMessage }
+  }
+}
+
+export const handler = _handlerWrapper

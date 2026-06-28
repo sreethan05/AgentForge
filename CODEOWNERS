@@ -1,0 +1,42 @@
+# Global
+* @botpress/swordfish
+
+# Packages
+
+## API / Client / CLI / SDK
+/packages/chat-api @botpress/kraken
+/packages/chat-client @botpress/kraken
+/packages/client @botpress/kraken
+/packages/cli @botpress/kraken
+/packages/sdk @botpress/kraken
+/packages/zui @botpress/swordfish
+
+## Common / Utils
+/packages/common @botpress/shell
+/packages/sdk-addons @botpress/shell
+
+## AI
+/packages/cognitive @botpress/dragon
+/packages/llmz @slvnperron @botpress/orca @botpress/swordfish 
+/packages/vai @slvnperron @botpress/orca @botpress/swordfish  
+/packages/zai @slvnperron @botpress/orca @botpress/swordfish  
+
+# Bots
+/bots @botpress/shell
+
+# Plugins
+/plugins @botpress/shell
+
+# Integrations
+/integrations @botpress/shell
+
+## LLM
+/integrations/anthropic @botpress/dragon
+/integrations/cerebras @botpress/dragon
+/integrations/fireworks-ai @botpress/dragon
+/integrations/google-ai @botpress/dragon
+/integrations/groq @botpress/dragon
+/integrations/openai @botpress/dragon
+
+## Chat
+/integrations/chat @botpress/kraken

@@ -1,0 +1,200 @@
+import { RuntimeError } from '@botpress/client'
+import { IntegrationLogger, z } from '@botpress/sdk'
+import Firecrawl, { SdkError } from '@mendable/firecrawl-js'
+import { trackEvent } from '../tracking'
+import { isValidGlob, matchGlob } from '../utils/globs'
+import * as bp from '.botpress'
+
+const LAMBDA_TIMEOUT = 55_000
+
+const COST_PER_FIRECRAWL_MAP = 0.001
+
+type StopReason = Awaited<ReturnType<bp.IntegrationProps['actions']['discoverUrls']>>['stopReason']
+
+type ZodIssueCode = z.ZodIssue['code']
+
+export const urlSchema = z.string().downstream((url) => {
+  url = url.trim()
+  if (!url.includes('://')) {
+    url = `https://${url}`
+  }
+  try {
+    const x = new URL(url)
+    if (x.protocol !== 'http:' && x.protocol !== 'https:') {
+      return z.ERR({
+        code: 'custom' satisfies ZodIssueCode,
+        message: 'Invalid protocol, only URLs starting with HTTP and HTTPS are supported',
+      })
+    }
+
+    if (!/.\.[a-zA-Z]{2,}$/.test(x.hostname)) {
+      return z.ERR({
+        code: 'custom' satisfies ZodIssueCode,
+        message: 'Invalid TLD',
+      })
+    }
+    const pathName = x.pathname.endsWith('/') ? x.pathname.slice(0, -1) : x.pathname
+    return z.OK(`${x.origin}${pathName}${x.search ? x.search : ''}`)
+  } catch (caught) {
+    const err = caught instanceof Error ? caught : new Error('Unknown error while parsing URL')
+    return z.ERR({
+      code: 'custom' satisfies ZodIssueCode,
+      message: 'Invalid URL: ' + err.message,
+    })
+  }
+})
+
+class Accumulator {
+  public processed = new Set<string>()
+  public urls = new Set<string>()
+
+  public included: number = 0
+  public excluded: number = 0
+
+  public cost: number = 0
+
+  public startedAt: number = Date.now()
+
+  public addUrls(urls: string[]): void {
+    for (let url of urls) {
+      if (this.stopReason) {
+        return
+      }
+
+      const parsed = urlSchema.safeParse(url)
+
+      if (!parsed.success) {
+        continue
+      }
+
+      url = parsed.data
+
+      if (this.onlyHttps && !url.toLowerCase().startsWith('https://')) {
+        this.excluded++
+        continue
+      }
+
+      if (this.processed.has(url)) {
+        continue
+      }
+
+      this.processed.add(url)
+
+      if (this.includedGlobs.length && this.includedGlobs.every((glob) => !matchGlob(url, glob))) {
+        this.excluded++
+        continue
+      }
+
+      this.included++
+
+      if (this.exclduedGlobs.some((glob) => matchGlob(url, glob))) {
+        this.excluded++
+        continue
+      }
+
+      this.urls.add(url)
+    }
+  }
+
+  public addCost(cost: number): void {
+    this.cost += cost
+  }
+
+  public constructor(
+    public readonly includedGlobs: string[],
+    public readonly exclduedGlobs: string[],
+    public readonly timeout: number = 55_000,
+    public readonly limit: number = 10_000,
+    public readonly onlyHttps: boolean = true
+  ) {}
+
+  public get remainingTime(): number {
+    return Math.max(0, this.startedAt + this.timeout - Date.now())
+  }
+
+  public get stopReason(): StopReason | null {
+    if (this.urls.size >= this.limit) {
+      return 'urls_limit_reached'
+    }
+
+    if (this.remainingTime <= 1000) {
+      // if we have less than 1s left, we consider it a time limit reached
+      return 'time_limit_reached'
+    }
+
+    return null
+  }
+}
+
+const firecrawlMap = async (props: { url: string; logger: IntegrationLogger; timeout: number }): Promise<string[]> => {
+  const firecrawl = new Firecrawl({ apiKey: bp.secrets.FIRECRAWL_API_KEY })
+
+  try {
+    const result = await firecrawl.map(props.url, {
+      sitemap: 'include',
+      limit: 10_000,
+      timeout: Math.max(1000, props.timeout - 2000),
+      includeSubdomains: true,
+    })
+
+    return result.links.map((x) => x.url)
+  } catch (err) {
+    props.logger.error('There was an error while calling Firecrawl map API.', err)
+
+    if (err instanceof SdkError) {
+      const isRateLimit = err.status === 429 || err.message.includes('rate limit')
+      await trackEvent('firecrawl_error', {
+        url: props.url,
+        operation: 'map',
+        errorType: isRateLimit ? 'rate_limited' : 'api_error',
+        errorMessage: err.message,
+        statusCode: err.status,
+        errorCode: err.code,
+      })
+    }
+
+    throw err
+  }
+}
+
+export const discoverUrls: bp.IntegrationProps['actions']['discoverUrls'] = async ({ input, logger, metadata }) => {
+  logger.forBot().debug('Discovering website URLs', { input })
+
+  for (const pattern of [...(input.include ?? []), ...(input.exclude ?? [])]) {
+    if (!isValidGlob(pattern)) {
+      throw new RuntimeError(`Forbidden characters in glob pattern: ${pattern}. Cannot contain "..", "{}", "[]"`)
+    }
+  }
+
+  const accumulator = new Accumulator(
+    input.include ?? [],
+    input.exclude ?? [],
+    LAMBDA_TIMEOUT,
+    input.count ?? 10_000,
+    input.onlyHttps
+  )
+
+  const firecrawl = firecrawlMap({ url: input.url, logger, timeout: accumulator.remainingTime }).then((links) => {
+    accumulator.addUrls(links)
+    accumulator.addCost(COST_PER_FIRECRAWL_MAP)
+  })
+
+  await Promise.allSettled([firecrawl])
+
+  metadata.setCost(accumulator.cost)
+
+  await trackEvent('urls_discovered', {
+    baseUrl: input.url,
+    urlCount: accumulator.urls.size,
+    excludedCount: accumulator.excluded,
+    stopReason: accumulator.stopReason ?? 'end_of_results',
+    hasIncludeFilters: (input.include?.length ?? 0) > 0,
+    hasExcludeFilters: (input.exclude?.length ?? 0) > 0,
+  })
+
+  return {
+    excluded: accumulator.excluded,
+    stopReason: accumulator.stopReason ?? 'end_of_results',
+    urls: [...accumulator.urls],
+  }
+}

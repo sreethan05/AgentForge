@@ -1,0 +1,6 @@
+metaId = null
+body = parse_json!(.body)
+if body.object == "whatsapp_business_account"  {
+    metaId = body.entry[0].id
+}
+metaId

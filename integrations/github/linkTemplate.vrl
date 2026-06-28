@@ -1,0 +1,9 @@
+webhookId = to_string!(.webhookId)
+webhookUrl = to_string!(.webhookUrl)
+
+# Send the user to the integration's own OAuth start step, which builds the
+# GitHub user-authorization URL from the OAuth client id secret. The
+# user-authorization flow (unlike the app-install flow) always echoes `state`
+# back, so it works whether or not the GitHub App is already installed.
+
+"{{ webhookUrl }}/oauth/start?state={{ webhookId }}"

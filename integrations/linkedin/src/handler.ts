@@ -1,0 +1,102 @@
+import { generateRedirection, getInterstitialUrl } from '@botpress/common/src/oauth-wizard/interstitial'
+import * as crypto from 'crypto'
+import { LinkedInOAuthClient } from './linkedin-api'
+import { verifyLinkedInWebhook, dispatchWebhookEvent } from './webhook'
+import * as bp from '.botpress'
+
+export const handler: bp.IntegrationProps['handler'] = async (props) => {
+  const { req, logger } = props
+
+  try {
+    if (req.path.startsWith('/oauth')) {
+      return await handleOAuthCallback(props)
+    }
+
+    if (isWebhookChallenge(req)) {
+      return handleWebhookChallenge(props)
+    }
+
+    if (req.method === 'POST') {
+      const isValid = verifyLinkedInWebhook(props)
+      if (!isValid) {
+        logger.forBot().error('Webhook signature verification failed')
+        return { status: 403 }
+      }
+
+      return await dispatchWebhookEvent(props)
+    }
+
+    logger.forBot().warn(`Unhandled request: ${req.method} ${req.path}`)
+    return { status: 404 }
+  } catch (thrown: unknown) {
+    const error = thrown instanceof Error ? thrown.message : String(thrown)
+    logger.forBot().error(`LinkedIn handler failed with error: ${error}`)
+    throw thrown
+  }
+}
+
+const isWebhookChallenge = (req: bp.HandlerProps['req']): boolean => {
+  const params = new URLSearchParams(req.query)
+  return params.has('challengeCode') && req.method === 'GET'
+}
+
+const handleWebhookChallenge = ({ req, ctx, logger }: bp.HandlerProps) => {
+  const params = new URLSearchParams(req.query)
+  const challengeCode = params.get('challengeCode')
+
+  if (!challengeCode) {
+    return { status: 400, body: 'Missing challengeCode' }
+  }
+
+  logger.forBot().info('Responding to LinkedIn webhook challenge')
+
+  const clientSecret = ctx.configurationType === 'manual' ? ctx.configuration.clientSecret : bp.secrets.CLIENT_SECRET
+  const challengeResponse = crypto.createHmac('sha256', clientSecret).update(challengeCode).digest('hex')
+
+  return {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      challengeCode,
+      challengeResponse,
+    }),
+  }
+}
+
+const handleOAuthCallback = async ({ req, client, ctx, logger }: bp.HandlerProps) => {
+  logger.forBot().debug('Handling OAuth callback')
+
+  try {
+    const searchParams = new URLSearchParams(req.query)
+    const error = searchParams.get('error')
+    if (error) {
+      throw new Error(`${error} - ${searchParams.get('error_description') ?? ''}`)
+    }
+
+    const authorizationCode = searchParams.get('code')
+    if (!authorizationCode) {
+      throw new Error('Authorization code not present in OAuth callback')
+    }
+
+    const oauthClient = await LinkedInOAuthClient.createFromAuthorizationCode({
+      authorizationCode,
+      client,
+      ctx,
+      logger,
+    })
+
+    logger.forBot().info(`Successfully authenticated LinkedIn user: ${oauthClient.getUserId()}`)
+    logger.forBot().info(`Granted scopes: ${oauthClient.getGrantedScopes().join(', ')}`)
+
+    await client.configureIntegration({
+      identifier: oauthClient.getUserId(),
+    })
+
+    return generateRedirection(getInterstitialUrl(true))
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const errorMessage = 'OAuth error: ' + msg
+    logger.forBot().error(errorMessage)
+    return generateRedirection(getInterstitialUrl(false, errorMessage))
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@botpresshub/knowledge",
+  "scripts": {
+    "check:type": "tsc --noEmit",
+    "build": "bp add -y && bp build",
+    "test": "vitest --run"
+  },
+  "private": true,
+  "dependencies": {
+    "@botpress/client": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "json5": "^2.2.3",
+    "jsonrepair": "^3.10.0"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@botpresshub/llm": "workspace:*",
+    "@bpinternal/genenv": "0.0.1",
+    "@types/semver": "^7.3.11",
+    "semver": "^7.3.8"
+  },
+  "bpDependencies": {
+    "llm": "../../interfaces/llm"
+  }
+}

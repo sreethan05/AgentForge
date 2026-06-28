@@ -1,0 +1,24 @@
+{
+  "name": "@botpresshub/anthropic",
+  "scripts": {
+    "build": "bp add -y && bp build",
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "test": "vitest --run"
+  },
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@botpress/client": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@botpresshub/llm": "workspace:*"
+  },
+  "bpDependencies": {
+    "llm": "../../interfaces/llm"
+  }
+}

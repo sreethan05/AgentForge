@@ -1,0 +1,20 @@
+{
+  "name": "@botpresshub/charts",
+  "scripts": {
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "build": "bp add -y && bp build",
+    "test": "vitest --run"
+  },
+  "private": true,
+  "dependencies": {
+    "@botpress/sdk": "workspace:*",
+    "axios": "^1.7.2"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "chart.js": "^3.9.1"
+  }
+}

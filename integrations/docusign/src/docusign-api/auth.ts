@@ -1,0 +1,141 @@
+import { handleErrorsDecorator as handleErrors } from '@botpress/common'
+import { RuntimeError } from '@botpress/sdk'
+import axios, { type AxiosInstance } from 'axios'
+import type { CommonHandlerProps, Result } from '../types'
+import {
+  type GetAccessTokenResp,
+  docusignOAuthAccessTokenRespSchema,
+  type GetUserInfoResp,
+  getUserInfoRespSchema,
+} from './schemas'
+import { GetAccessTokenParams } from './types'
+import * as bp from '.botpress'
+
+type OAuthParameters = {
+  oauthBaseUrl: string
+  clientId: string
+  clientSecret: string
+}
+
+export class DocusignAuthClient {
+  private _axiosClient: AxiosInstance
+
+  private constructor(params: OAuthParameters) {
+    const { oauthBaseUrl, clientId, clientSecret } = params
+
+    // Opted for axios here since the docusign package only has
+    // a function for getting an accessToken from the oauth code
+    // but not for refresh tokens
+    this._axiosClient = axios.create({
+      baseURL: oauthBaseUrl,
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+        'Cache-Control': 'no-store',
+        Pragma: 'no-cache',
+      },
+    })
+  }
+
+  private async _getAccessToken(params: GetAccessTokenParams): Promise<Result<GetAccessTokenResp>> {
+    // The Docusign API Postman collection example uses FormData for this endpoint.
+    const formData = new FormData()
+    Object.entries(params).forEach(([key, value]) => formData.append(key, value))
+
+    // Docusign doesn't return a timestamp when a token is issued. So a timestamp
+    // is generated prior to the request being made so the expiry time is accurate.
+    const tokenRequestedAt = Date.now()
+
+    const resp = await this._axiosClient.post('/oauth/token', formData)
+
+    if (resp.status < 200 || resp.status >= 300) {
+      return {
+        success: false,
+        error: new RuntimeError(
+          `Failed to retrieve access token w/${params.grant_type} | Invalid Status '${resp.status}'`
+        ),
+      }
+    }
+
+    const result = docusignOAuthAccessTokenRespSchema.safeParse(resp.data)
+    if (!result.success) {
+      return {
+        success: false,
+        error: new RuntimeError(`Failed to retrieve access token w/${params.grant_type} | Schema Parse Failure`),
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        accessToken: result.data.access_token,
+        tokenType: result.data.token_type,
+        expiresAt: tokenRequestedAt + result.data.expires_in * 1000,
+        refreshToken: result.data.refresh_token,
+      },
+    }
+  }
+
+  @handleErrors('Failed to obtain Docusign OAuth access token from authorization code')
+  public async getAccessTokenWithCode(code: string): Promise<Result<GetAccessTokenResp>> {
+    return this._getAccessToken({
+      grant_type: 'authorization_code',
+      code,
+    })
+  }
+
+  @handleErrors('Failed to refresh Docusign OAuth access token')
+  public async getAccessTokenWithRefreshToken(refreshToken: string): Promise<Result<GetAccessTokenResp>> {
+    return this._getAccessToken({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    })
+  }
+
+  @handleErrors('Failed to retrieve Docusign user info')
+  public async getUserInfo(accessToken: string, tokenType: string): Promise<Result<GetUserInfoResp>> {
+    const resp = await this._axiosClient.get('/oauth/userinfo', {
+      headers: {
+        Authorization: `${tokenType} ${accessToken}`,
+      },
+    })
+
+    if (resp.status < 200 || resp.status >= 300) {
+      return {
+        success: false,
+        error: new RuntimeError(`Failed to retrieve user info | Invalid Status '${resp.status}'`),
+      }
+    }
+
+    const result = getUserInfoRespSchema.safeParse(resp.data)
+    if (!result.success) {
+      return {
+        success: false,
+        error: new RuntimeError('Failed to retrieve user info | Schema Parse Failure'),
+      }
+    }
+
+    return { success: true, data: result.data }
+  }
+
+  public static create(props: CommonHandlerProps): DocusignAuthClient {
+    const { ctx } = props
+    switch (ctx.configurationType) {
+      case 'sandbox':
+        return new DocusignAuthClient({
+          oauthBaseUrl: bp.secrets.SANDBOX_OAUTH_BASE_URL,
+          clientId: bp.secrets.SANDBOX_CLIENT_ID,
+          clientSecret: bp.secrets.SANDBOX_CLIENT_SECRET,
+        })
+      case null:
+        return new DocusignAuthClient({
+          oauthBaseUrl: bp.secrets.OAUTH_BASE_URL,
+          clientId: bp.secrets.CLIENT_ID,
+          clientSecret: bp.secrets.CLIENT_SECRET,
+        })
+      default:
+        ctx satisfies never
+    }
+
+    throw new RuntimeError(`Unsupported configuration type: ${props.ctx.configurationType}`)
+  }
+}

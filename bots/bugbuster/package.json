@@ -1,0 +1,30 @@
+{
+  "name": "@bp-bots/bugbuster",
+  "scripts": {
+    "postinstall": "genenv -o ./.genenv/index.ts -e BUGBUSTER_GITHUB_TOKEN -e BUGBUSTER_GITHUB_WEBHOOK_SECRET -e BUGBUSTER_LINEAR_API_KEY -e BUGBUSTER_LINEAR_WEBHOOK_SIGNING_SECRET -e BUGBUSTER_TELEGRAM_BOT_TOKEN",
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "build": "bp add -y && bp build"
+  },
+  "private": true,
+  "dependencies": {
+    "@botpress/client": "workspace:*",
+    "@botpress/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@botpresshub/github": "workspace:*",
+    "@botpresshub/linear": "workspace:*",
+    "@botpresshub/slack": "workspace:*",
+    "@botpresshub/telegram": "workspace:*",
+    "@bpinternal/genenv": "0.0.1"
+  },
+  "bpDependencies": {
+    "github": "../../integrations/github",
+    "linear": "../../integrations/linear",
+    "slack": "../../integrations/slack",
+    "telegram": "../../integrations/telegram"
+  }
+}

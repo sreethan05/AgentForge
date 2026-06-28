@@ -1,0 +1,31 @@
+{
+  "name": "@botpresshub/freshchat",
+  "version": "0.0.2",
+  "description": "Integration for Freshchat",
+  "private": true,
+  "scripts": {
+    "check:type": "tsc --noEmit",
+    "check:bplint": "bp lint",
+    "build": "bp add -y && bp build",
+    "deploy": "bp deploy",
+    "eslint": "eslint ./ --ext .ts --ext .tsx --fix",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@botpress/client": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@botpress/sdk-addons": "workspace:*",
+    "axios": "^1.4.0"
+  },
+  "devDependencies": {
+    "@botpress/cli": "workspace:*",
+    "@botpress/common": "workspace:*",
+    "@botpress/sdk": "workspace:*",
+    "@botpresshub/hitl": "workspace:*",
+    "@types/lodash": "^4.14.191"
+  },
+  "bpDependencies": {
+    "hitl": "../../interfaces/hitl"
+  }
+}

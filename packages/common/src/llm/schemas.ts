@@ -1,0 +1,224 @@
+import { z } from '@botpress/sdk'
+import dedent from 'dedent'
+
+export const ToolCallSchema = z.object({
+  id: z.string(),
+  type: z.enum(['function']),
+  function: z.object({
+    name: z.string(),
+    arguments: z
+      .record(z.any())
+      .nullable()
+      .describe('Some LLMs may generate invalid JSON for a tool call, so this will be `null` when it happens.'),
+  }),
+})
+
+export const ToolChoiceSchema = z.object({
+  // TODO: remove empty value from enum once Studio issue is fixed
+  type: z.enum(['auto', 'specific', 'any', 'none', '']).optional(), // note: Claude doesn't support "none" but we can simply strip out the tools when `type` is "none"
+  functionName: z.string().optional().describe('Required if `type` is "specific"'),
+})
+
+export const MessageSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  type: z.enum(['text', 'tool_calls', 'tool_result', 'multipart']).default('text'),
+  toolCalls: z.array(ToolCallSchema).optional().describe('Required if `type` is "tool_calls"'),
+  toolResultCallId: z.string().optional().describe('Required if `type` is "tool_result"'), // note: not supported by Gemini
+  content: z
+    .string()
+    // TODO: union types are not supported yet by the Studio, comment this out when testing via an action card in the Studio
+    .or(
+      z.array(
+        z.object({
+          type: z.enum(['text', 'image']),
+          mimeType: z
+            .string()
+            .optional()
+            .describe(
+              'Indicates the MIME type of the content. If not provided it will be detected from the content-type header of the provided URL.'
+            ),
+          text: z.string().optional().describe('Required if part type is "text" '),
+          url: z.string().optional().describe('Required if part type is "image"'),
+        })
+      )
+    )
+    // .optional() // cannot be optional because there is a bug in '@bpinternal/zui' that prevents it - Fleur
+    .nullable()
+    .describe(
+      'Required unless `type` is "tool_call". If `type` is "multipart", this field must be an array of content objects. If `type` is "tool_result" then this field should be the result of the tool call (a plain string or a JSON-encoded array or object). If `type` is "tool_call" then the `toolCalls` field should be used instead.'
+    ),
+})
+
+export const ModelRefSchema = z.object({
+  id: z.string().title('LLM Model ID').describe('Unique identifier of the large language model'),
+})
+
+export const ModelSchema = ModelRefSchema.extend({
+  name: z.string(),
+  description: z.string(),
+  tags: z.array(
+    z.enum([
+      'recommended',
+      'deprecated',
+      'general-purpose',
+      'low-cost',
+      'vision',
+      'coding',
+      'agents',
+      'function-calling',
+      'roleplay',
+      'storytelling',
+      'reasoning',
+      'preview',
+      'speech-to-text',
+      'image-generation',
+      'text-to-speech',
+    ])
+  ),
+  input: z.object({
+    maxTokens: z.number().int(),
+    costPer1MTokens: z.number().describe('Cost per 1 million tokens, in U.S. dollars'),
+  }),
+  output: z.object({
+    maxTokens: z.number().int(),
+    costPer1MTokens: z.number().describe('Cost per 1 million tokens, in U.S. dollars'),
+  }),
+})
+
+const ReasoningEffortSchema = z.enum(['low', 'medium', 'high', 'dynamic', 'none'])
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>
+
+export const GenerateContentInputSchema = <S extends z.ZodSchema>(modelRefSchema: S) =>
+  z.object({
+    model: modelRefSchema.optional().describe('Model to use for content generation'),
+    reasoningEffort: ReasoningEffortSchema.optional()
+      .title('Reasoning Effort Level')
+      .describe(
+        dedent`
+          Reasoning effort level to use for models that support reasoning. Specifying "none" will indicate the LLM to not use reasoning (for models that support optional reasoning). A "dynamic" effort will indicate the provider to automatically determine the reasoning effort (if supported by the provider). If not provided the model will not use reasoning for models with optional reasoning or use the default reasoning effort specified by the provider for reasoning-only models.
+          Note: A higher reasoning effort will incur in higher output token charges from the LLM provider.
+        `
+      ),
+    systemPrompt: z.string().optional().title('System Prompt').describe('Optional system prompt to guide the model'),
+    messages: z
+      .array(MessageSchema)
+      .title('Messages to Process')
+      .describe('Array of messages for the model to process'),
+    responseFormat: z
+      .enum(['text', 'json_object'])
+      .optional()
+      .title('Response Format')
+      .describe(
+        'Response format expected from the model. If "json_object" is chosen, you must instruct the model to generate JSON either via the system prompt or a user message.'
+      ), // note: only OpenAI and Groq support this but for other models we can just append this as an indication in the system prompt
+    // note: we don't support streaming yet
+    maxTokens: z
+      .number()
+      .optional()
+      .title('Maximum number of output tokens')
+      .describe('Maximum number of tokens allowed in the generated response'),
+    temperature: z
+      .number()
+      .min(0)
+      .max(2)
+      // @ts-ignore
+      .displayAs({ id: 'slider', params: { stepSize: 0.01, horizontal: true } })
+      .default(1)
+      .title('Temperature')
+      .describe('Sampling temperature for the model. Higher values result in more random outputs.'),
+    topP: z
+      .number()
+      .min(0)
+      .max(1)
+      .default(1)
+      // @ts-ignore
+      .displayAs({ id: 'slider', params: { stepSize: 0.01, horizontal: true } })
+      .title('Top-P')
+      .describe(
+        'Top-p sampling parameter. Limits sampling to the smallest set of tokens with a cumulative probability above the threshold.'
+      ), // TODO: .placeholder() from zui doesn't work, so we have to use .default() which introduces some typing issues
+    // note: topK is supported by Claude and Gemini but not by OpenAI or Groq
+    stopSequences: z
+      .array(z.string())
+      .max(4)
+      .optional()
+      .title('Stop Sequences')
+      .describe('Sequences where the model should stop generating further tokens.'),
+    tools: z
+      .array(
+        z.object({
+          type: z.literal('function'),
+          function: z.object({
+            name: z.string().describe('Function name'),
+            description: z.string().optional(),
+            argumentsSchema: z.object({}).passthrough().optional().describe('JSON schema of the function arguments'),
+          }),
+        })
+      )
+      .optional()
+      .title('Tools')
+      .describe('List of tools available for the model to use'),
+    // TODO: an object with options doesn't seem to be supported by the Studio as it's not rendering correctly, the dropdown for "type" is not working and it's sending a blank value instead which causes a schema validation error unless an empty value is allowed in the `type` enum
+    toolChoice: ToolChoiceSchema.optional()
+      .title('Tool Choice')
+      .describe('The chosen tool to use for content generation'), // note: Gemini doesn't support this but we can just ignore it there
+    userId: z.string().optional().title('User ID').describe('Unique identifier of the user that sent the prompt'),
+    debug: z
+      .boolean()
+      .optional()
+      .hidden()
+      .title('Debug Mode')
+      .describe('Set to `true` to output debug information to the bot logs'),
+    meta: z
+      .object({
+        promptSource: z
+          .string()
+          .optional()
+          .describe(
+            'Source of the prompt, e.g. agent/:id/:version cards/ai-generate, cards/ai-task, nodes/autonomous, etc.'
+          ),
+        promptCategory: z.string().optional(), // Deprecated, for backwards compatibility
+        integrationName: z
+          .string()
+          .optional()
+          .describe('Name of the integration that originally received the message that initiated this action'),
+      })
+      .optional()
+      .hidden()
+      .title('Prompt Metadata')
+      .describe('Contextual metadata about the prompt'),
+  })
+
+export const GenerateContentInputBaseSchema = GenerateContentInputSchema(ModelRefSchema)
+
+export const GenerateContentOutputSchema = z.object({
+  id: z.string().title('Response ID').describe('Response ID from LLM provider'),
+  provider: z.string().title('LLM Provider').describe('LLM provider name'),
+  model: z.string().title('Model Name').describe('The name of the LLM model that was used'),
+  choices: z
+    .array(
+      MessageSchema.omit({ role: true }).extend({
+        role: z.literal('assistant'),
+        index: z.number().int(),
+        stopReason: z.enum(['stop', 'max_tokens', 'tool_calls', 'content_filter', 'other']),
+        // note: stopSequence is supported by Claude but not by OpenAI, Groq or Gemini
+      })
+    )
+    .title('Generated Choices')
+    .describe('Array of generated message choices from the model'),
+  usage: z
+    .object({
+      inputTokens: z.number().int().describe('Number of input tokens used by the model'),
+      inputCost: z.number().describe('Cost of the input tokens received by the model, in U.S. dollars'),
+      outputTokens: z.number().int().describe('Number of output tokens used by the model'),
+      outputCost: z.number().describe('Cost of the output tokens generated by the model, in U.S. dollars'),
+    })
+    .title('Usage Information')
+    .describe('A breakdown of token usage and cost information'),
+  botpress: z
+    .object({
+      cost: z.number().title('Generation Cost').describe('Total cost of the content generation, in U.S. dollars'),
+    })
+    .title('Botpress Metadata')
+    .describe('Metadata added by Botpress'),
+})
