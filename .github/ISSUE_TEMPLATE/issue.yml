@@ -1,25 +1,19 @@
-name: Botpress Cloud
-description: File a bug report or feature request for Botpress Cloud
+name: AgentForge
+description: File a bug report or feature request for AgentForge
 body:
   - type: markdown
     attributes:
-      value: "Thank you for taking the time to fill out this issue report.\n\nKeep in mind that you will get a faster response time by talking to us on [our Discord Server](https://discord.gg/botpress)."
+      value: "Thank you for taking the time to fill out this issue report. Please include enough context for the issue to be reproduced or understood."
   - type: checkboxes
-    id: dx-related-confirmation
+    id: project-related-confirmation
     attributes:
-      label: 'Make sure the issue is related to Botpress Cloud.'
-      description: 'When in doubt, please reach out on [our Discord Server](https://discord.gg/botpress).'
+      label: 'Make sure the issue is related to AgentForge.'
+      description: 'Use this template for bugs, improvements, or feature requests related to this project.'
       options:
-        - label: 'I confirm that the reported bug or feature request is not related to Botpress v12 and below (on premise version)'
+        - label: 'I confirm that this issue is related to AgentForge.'
           required: true
-  - type: input
-    id: report-id
-    attributes:
-      label: 'Report ID'
-      description: 'Directly in the Studio, click on the "Report a Problem" button in the bottom left corner to create a report. You can then copy the report ID. Providing a report ID will allow us to help you faster. This information is safe to share publicly.'
-      placeholder: 'e.g. report_0123456789ABCDEFGHIJKLMNOPQRS'
   - type: textarea
     id: issue-description
     attributes:
       label: 'Description of the bug or feature request'
-      description: 'What is your bug or feature request ? Make sure to add logs, context or any information that you think might help understand and solve the issue.'
+      description: 'Describe the bug, improvement, or feature request. Add logs, context, screenshots, or reproduction steps when useful.'

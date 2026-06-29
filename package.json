@@ -1,6 +1,11 @@
 {
-  "name": "botpress",
+  "name": "agentforge",
+  "description": "AgentForge is a TypeScript monorepo for building AI agents, integrations, plugins, and bot-as-code workflows.",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sreethan05/AgentForge.git"
+  },
   "scripts": {
     "build": "turbo run build",
     "bump": "depsynky bump --ignore-dev && pnpm -w install",
