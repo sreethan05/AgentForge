@@ -10,15 +10,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v2
-      - name: Setup
-        uses: ./.github/actions/setup
-      - name: Login to Botpress
+      - name: Check Botpress production credentials
+        id: credentials
         env:
           TOKEN: ${{ secrets.PRODUCTION_TOKEN_CLOUD_OPS_ACCOUNT }}
           WORKSPACE_ID: ${{ secrets.PRODUCTION_CLOUD_OPS_WORKSPACE_ID }}
-        run: pnpm bp login -y --token "$TOKEN" --workspace-id "$WORKSPACE_ID"
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$WORKSPACE_ID" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping production version verification because Botpress production secrets are not configured."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v2
+        if: steps.credentials.outputs.enabled == 'true'
+      - name: Setup
+        if: steps.credentials.outputs.enabled == 'true'
+        uses: ./.github/actions/setup
+      - name: Login to Botpress
+        if: steps.credentials.outputs.enabled == 'true'
+        env:
+          TOKEN: ${{ secrets.PRODUCTION_TOKEN_CLOUD_OPS_ACCOUNT }}
+          WORKSPACE_ID: ${{ secrets.PRODUCTION_CLOUD_OPS_WORKSPACE_ID }}
+        run: pnpm bp login -y --api-url "https://api.botpress.cloud" --workspaceId "$WORKSPACE_ID" --token "$TOKEN"
       - name: Check integration versions
+        if: steps.credentials.outputs.enabled == 'true'
         env:
           SERVER_URL: ${{ github.server_url }}
           REPO: ${{ github.repository }}
