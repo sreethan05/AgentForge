@@ -92,3 +92,6 @@ jobs:
 
             exit 1
           fi
+      - name: Workflow skipped notice
+        if: steps.credentials.outputs.enabled == 'false'
+        run: echo "::notice::Production version verification workflow was skipped due to missing Botpress credentials."
